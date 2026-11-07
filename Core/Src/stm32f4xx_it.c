@@ -22,6 +22,11 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#if defined(WEIGHT_WIND_TUNNEL_SPEED)
+#include "weight_wind_speed.h"
+#elif defined(WEIGHT_WIND_TUNNEL_ADC)
+#include "weight_adc_stream.h"
+#endif
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -187,6 +192,9 @@ void SysTick_Handler(void)
   /* USER CODE END SysTick_IRQn 0 */
   HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */
+#if defined(WEIGHT_WIND_TUNNEL_ADC) || defined(WEIGHT_WIND_TUNNEL_SPEED)
+  WeightWindTunnel_Tick(HAL_GetTick());
+#endif
 
   /* USER CODE END SysTick_IRQn 1 */
 }

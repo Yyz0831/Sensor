@@ -10,11 +10,13 @@
 #include <stdio.h>
 #include <string.h>
 
-#define SAMPLE_PERIOD_MS 250U
+#define SAMPLE_PERIOD_MS 100U
+#define CALIBRATION_PERIOD_MS 250U
 #define RX_CAPACITY 128U
 
 static void SystemClock_Config(void);
 static WeightCalibration calibration;
+static uint32_t last_calibration_ms;
 static uint8_t rx_byte;
 static uint8_t rx_queue[RX_CAPACITY];
 static volatile unsigned rx_head;
@@ -110,7 +112,10 @@ static void ExecuteCommand(const char *line)
       SendText("# 无效命令；使用tare、cal 正数质量g 或help。\r\n"); return;
   }
   if (result == WEIGHT_PENDING)
+  {
+    last_calibration_ms = HAL_GetTick();
     SendText("# 开始采集16次（约4秒），请保持载荷稳定。\r\n");
+  }
   else
     ReportResult(result);
 }
@@ -202,9 +207,12 @@ int main(void)
   else
     SendText("# 模块未响应，请检查5V/GND/SDA/SCL；读取会自动重试。\r\n");
   PrintHelp();
+  SendText("# 串口读取/输出约10 Hz；电脑端可生成200 Hz保持值CSV，非200 Hz独立测量。\r\n");
 
   uint32_t last_sample_ms = HAL_GetTick();
   uint32_t last_blink_ms = last_sample_ms;
+  int32_t raw = 0;
+  int ok = 0;
   while (1)
   {
     ProcessSerial();
@@ -216,10 +224,11 @@ int main(void)
     }
     if ((uint32_t)(now - last_sample_ms) >= SAMPLE_PERIOD_MS)
     {
-      last_sample_ms = now;
-      int32_t raw;
-      int ok = WeightI2C_ReadRaw(&raw);
-      ReportResult(WeightCalibration_Sample(&calibration, ok, raw));
+      /* Keep the 100 ms phase; a late loop does not produce a burst of reads. */
+      last_sample_ms += ((uint32_t)(now - last_sample_ms) / SAMPLE_PERIOD_MS) * SAMPLE_PERIOD_MS;
+      ok = WeightI2C_ReadRaw(&raw);
+      if (!ok)
+        ReportResult(WeightCalibration_Sample(&calibration, 0, raw));
       double grams;
       if (!ok)
         (void)snprintf(text, sizeof(text),
@@ -235,6 +244,16 @@ int main(void)
                        (unsigned long)now, (long)raw,
                        calibration.calibrated && !calibration.zero_valid ? "待去皮" : "未校准");
       SendText(text);
+    }
+    /* Tare/cal still average 16 readings spaced about 250 ms (about 4 s).
+     * Use the most recent 10 Hz reading, not the repeated 200 Hz CSV rows.
+     */
+    now = HAL_GetTick();
+    if (calibration.operation != WEIGHT_IDLE &&
+        (uint32_t)(now - last_calibration_ms) >= CALIBRATION_PERIOD_MS)
+    {
+      last_calibration_ms += CALIBRATION_PERIOD_MS;
+      ReportResult(WeightCalibration_Sample(&calibration, ok, raw));
     }
     HAL_Delay(1);
   }

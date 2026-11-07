@@ -1,11 +1,44 @@
-# Lab 1 双温度传感器采集
+# Lab 1 风洞传感器与温度采集
 
-当前默认环境为 [TAL220B + Unit Weight-I2C 测试](docs/weight_i2c.md)：`weight_i2c`，
-支持原始 ADC、串口 `tare` 和 `cal 质量g` 校准。
-当前已记录实际100 g砝码测得的默认系数 `1082.79688 ADC/g`；上传当前固件后，
+工程：`Yyz0831/Sensor`，目标板：Nucleo-F411RE。
+源码版本标识：**`WT-LAB1-15CM-20261107`**（见 `VERSION`）；Git 提交号标识具体源码快照。
+
+当前默认环境为 [课程 Wind Tunnel Logger 原始ADC模式](docs/wind_tunnel_adc.md)：
+`wind_tunnel_adc`，115200 baud、约200行/秒，每行仅一个原始ADC整数。
+传感器有效更新仍约10 Hz；此阶段采集ADC与真实风速做标定，尚未输出m/s。
+可选的 [标定风速模式](docs/wind_tunnel_speed.md) 为 `wind_tunnel_speed`：使用0.2秒在线EMA和13节点分段换算，
+每次RESET在无风条件下采集约4秒原始读数校零。超出标定范围仍继续外推输出，包括超过12 m/s；
+I²C失败或读数过期250 ms仍暂停输出。历史精度验证仅覆盖2–10 m/s，此次更新未自动烧录。
+旧五组标定参数另有独立上传环境 **`wind_tunnel_speed_backup`**，可在 PlatformIO Project Tasks
+中单独选择 Upload。它使用固定备份参数表；`wind_tunnel_speed` 继续使用最新自动标定参数。
+两个风速环境都保留 0.2 秒 EMA、200 Hz 更新与 reset 后约 4 秒无风校零。
+最新风速参数来自 `run_20261105_112511` 的原始 ADC 标定；采集 CSV、生成的
+`calibration/` 结果和编译产物保留在本地，不属于源码发布内容。
+[TAL220B + Unit Weight-I2C 诊断/称重](docs/weight_i2c.md) 保留为 `weight_i2c`，
+支持中文标签、串口 `tare` 和 `cal 质量g` 校准。
+称重模式已记录实际100 g砝码测得的默认系数 `1082.79688 ADC/g`；上传 `weight_i2c` 后，
 每次上电空载执行 `tare` 即可称重。手动 `cal` 的后续更新只在本次运行有效。
+原始ADC模式不使用这个克数系数。
 [Mini Scales 独立称重测试](docs/mini_scales.md) 保留为 `mini_scales`；
 原温度实验保留为 `nucleo_f411re`，请显式选择对应环境上传。
+
+## 风速模式的处理与边界规则
+
+- **处理次序**：约每 100 ms 读取一次原始 ADC；每 5 ms 使用最新保持值更新在线 EMA
+  （时间常数 0.2 s）；随后减去本次无风零点，再按 12 个拟合节点加原点的表线性插值，
+  以 115200 baud 输出三位小数的 m/s。EMA 不使用未来值，200 Hz 输出不是 200 Hz 独立采样。
+- **归零**：每次 reset 先固定等待约 0.5 s，随后在风扇关闭时采集 40 次原始 ADC，
+  相邻有效读取至少间隔 100 ms（约 4 s），取均值作为零点。归零不用 EMA；
+  采样极差超过 500 counts、I²C 失败或间隔达到 250 ms 均拒绝本次归零并保持静默。
+  需要重新 reset，或长按 B1 至少 1 s 后重新归零；固定启动等待不是自动检测完全稳定。
+- **数值边界**：滤波后 ADC 增量 `delta <= 0` 输出 `0.000`；正增量在相邻节点间线性插值，
+  高于最后节点沿末段斜率继续外推，包括超过 12 m/s，既不截断也不因超范围停输。
+  固定原点和外推段不代表这些风速已经完成精度验证，标定评分范围仍为 2–10 m/s。
+- **故障边界**：运行中 I²C 失败、读数过期达到 250 ms 或非有限换算值会暂停输出并清除
+  EMA 历史；零点仍有效时，恢复有效读取后从新读数重新初始化滤波并恢复输出。
+  纯 ADC 模式不应用以上风速滤波、校零和查表。
+
+## 温度采集模式
 
 Nucleo-F411RE 每 250 ms 读取 MCP9808 和 TMP36，通过 ST-Link 虚拟串口输出 CSV。
 板载绿色 LD2 继续亮 500 ms、灭 500 ms。没有接上传感器也可以运行；失败读数输出 `nan`。
@@ -86,8 +119,11 @@ python tools/temperature_logger.py --port /dev/cu.usbmodemXXXX --no-plot --durat
 ## 本机验证
 
 ```sh
+python3 -m pip install -r tools/requirements.txt -r tools/requirements-calibration.txt
 python3 -m unittest discover -s test -p 'test_*.py' -v
 ```
 
-测试需要本机 C 编译器和 pyserial，验证实际 C 温度换算、负温度和状态位，以及分段串口数据的 CSV 记录。
+测试需要本机 C 编译器、pyserial、NumPy 和 SciPy，覆盖温度换算、串口记录、
+原始 ADC 输出、风速校零/EMA/持续输出及 12 节点标定工具。
+课程 Logger 的本地安装存在时，还会验证它对 ADC 和风速串口行的解析。
 实际传感器、接线和温度响应仍需上传后在板上验证。
